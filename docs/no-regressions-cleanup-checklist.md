@@ -1,67 +1,213 @@
-# No-regressions cleanup checklist
+# No-Regressions Cleanup Checklist (FreshTomato-ARM)
 
-Purpose: keep firmware builds stable while you incrementally reduce “spaghetti.” This is the **first** step before any refactor work.
-
-## 0) Define scope and non-goals
-- **Do not touch vendor SDK drops** (e.g., `release/src-rt-*` and Broadcom SDK code). Treat them as read-only.  
-- **Only touch project glue** (top-level scripts, build wrappers, packaging, and config logic).  
-- **Avoid semantic Makefile changes** (no target reordering, variable renames, or logic rewrites).  
-
-## 1) Establish the golden builds (regression oracle)
-- Identify **one target per SDK line** to build (e.g., RT-6.x, RT-7.x main, RT-7.14.x).  
-- For each target, capture:
-  - Build logs
-  - Image file hash (e.g., `sha256sum`)
-  - Image size
-  - `strings` output (or a summarized diff of key strings)
-- Store these artifacts in a dedicated folder (e.g., `tools/artifacts/golden-builds/DATE/`).  
-
-## 2) Freeze the working tree before changes
-- Clean workspace: `git clean -fdxq`  
-- Reset to a known commit: `git reset --hard`  
-- Record the commit hash used for the golden builds.  
-
-## 3) Establish a repeatable build entrypoint
-- Prefer a wrapper script (e.g., `tools/scripts/build-wrapper.sh`) that accepts target names and normalizes env setup.  
-- This wrapper should **only call existing Make targets**—no logic changes.  
-- Ensure wrapper output is deterministic and log-friendly.  
-
-## 4) Inventory high-value glue areas
-- Identify duplicated logic that’s safe to **extract into includes**:
-  - repeated Makefile snippets (flags, target lists, config blocks)
-  - duplicated shell blocks in scripts
-- Identify conditional “tables” (model configs, flash sizes, feature flags) that can be moved to **data tables** without changing logic.
-
-## 5) Make mechanical, low-risk refactors only
-- **Extract code without changing behavior**:
-  - move duplicated Makefile blocks into `tools/build/*.mk` and `include` them
-  - move repeated shell blocks into `tools/scripts/*.sh`
-  - replace `if/elif` model conditionals with a data table lookup
-- Add comments for “why this hack exists” rather than changing it.  
-
-## 6) Run diff-based regression checks after each change
-- Rebuild the golden targets with the wrapper.
-- Compare:
-  - image hash
-  - image size
-  - `strings` output (or small curated string set)
-- If any changes occur, stop and investigate before continuing.  
-
-## 7) Keep changes small and reviewable
-- One refactor per commit (e.g., “extract target map to include”).  
-- Avoid multi-purpose commits.  
-- Add a short note in the commit message explaining expected **no behavior change**.  
-
-## 8) Document the safe/unsafe map
-- Track: “safe to touch” vs. “do not touch” zones in a single doc.  
-- Keep it brief and authoritative so future refactors don’t stray.  
-
-## 9) Tooling tips (safe defaults)
-- Formatting: `shfmt -i 2 -ci` **only outside vendor SDK**.  
-- Lint: `shellcheck` in warning mode for scripts you own.  
-- Avoid mass formatting/renaming unless you can re-validate all golden builds.  
+**Purpose**
+Keep firmware builds stable while incrementally reducing “spaghetti.”
+This checklist must be completed **before** any refactor work begins.
 
 ---
 
-### Ready to proceed
-Once the checklist is complete, the next safe step is the **model capability table** extraction (highest ROI, minimal behavior risk).
+## 0) Define scope and non-goals (hard rules)
+
+**Do not touch (read-only):**
+
+* Vendor SDK drops:
+  * `release/src-rt-*`
+  * Broadcom SDK code
+  * Toolchain internals
+* Generated files and binary blobs
+
+**Allowed scope:**
+
+* Top-level scripts
+* Build wrappers
+* Packaging logic
+* Project-owned config logic
+* Documentation
+
+**Explicit non-goals:**
+
+* No semantic Makefile changes
+  (no target reordering, variable renames, or logic rewrites)
+* No build system “modernization”
+* No dead-code deletion inside SDK trees
+
+---
+
+## 1) Establish golden builds (regression oracle)
+
+Select **one representative target per SDK line**:
+
+* RT-6.x
+* RT-7.x main
+* RT-7.14.x
+
+For each target, capture and store:
+
+* Full build log
+* Image hash (`sha256sum`)
+* Image size
+* `strings` output
+  (or a curated subset of known-stable strings)
+
+**Storage layout (example):**
+
+```
+tools/artifacts/golden-builds/
+└── 2026-01-XX/
+    ├── sdk6-n18u/
+    ├── sdk7-ac3200/
+    └── sdk714-ac5300/
+```
+
+These artifacts are the **single source of truth** for regressions.
+
+---
+
+## 2) Freeze the working tree
+
+Before *any* changes:
+
+```bash
+git clean -fdxq
+git reset --hard
+```
+
+* Record the exact commit hash used for golden builds
+* Do not rebase or amend this commit during cleanup work
+
+---
+
+## 3) Establish a repeatable build entrypoint
+
+Create a **wrapper script** (example: `tools/scripts/build-wrapper.sh`) that:
+
+* Accepts target names as arguments
+* Normalizes environment variables
+* Invokes existing `make` targets verbatim
+* Produces deterministic, log-friendly output
+
+**Constraints:**
+
+* No new logic
+* No conditional behavior changes
+* Wrapper must be a thin layer only
+
+All future builds (including regression checks) must go through this wrapper.
+
+---
+
+## 4) Inventory high-value glue areas
+
+Identify **safe, high-ROI extraction candidates**:
+
+### A) Duplicated Makefile logic
+
+* Repeated flag blocks
+* Target lists
+* Common config snippets
+
+### B) Duplicated shell logic
+
+* Environment setup blocks
+* Repeated pre/post build steps
+
+### C) Conditional tables
+
+* Router model → flash size
+* Feature flags
+* SMP / non-SMP mappings
+
+These are candidates for **mechanical extraction only**.
+
+---
+
+## 5) Perform mechanical, low-risk refactors only
+
+Allowed refactors:
+
+* Extract duplicated Makefile blocks into `tools/build/*.mk`
+* Extract repeated shell logic into `tools/scripts/*.sh`
+* Replace `if/elif` model conditionals with data table lookups
+* Add comments explaining *why* hacks exist
+
+**Not allowed:**
+
+* Logic simplification
+* Behavior changes
+* Variable renaming
+* Reordering Makefile targets
+
+If a refactor *feels* clever, it is out of scope.
+
+---
+
+## 6) Run diff-based regression checks after every change
+
+After **each** refactor commit:
+
+1. Rebuild all golden targets using the wrapper
+2. Compare against golden artifacts:
+
+   * Image hash
+   * Image size
+   * `strings` output (or curated subset)
+
+**If any difference is detected:**
+
+* Stop immediately
+* Investigate
+* Revert or fix before proceeding
+
+No cumulative drift is allowed.
+
+---
+
+## 7) Keep changes small and reviewable
+
+* One refactor per commit
+* One concern per commit
+* No “drive-by” cleanups
+
+**Commit message must include:**
+
+* What was extracted
+* Explicit statement: *“No behavior change expected”*
+
+---
+
+## 8) Document the safe / unsafe map
+
+Maintain a short, authoritative document that lists:
+
+* Safe-to-touch zones
+* Read-only zones
+* Rationale for each
+
+This prevents future refactors from crossing dangerous boundaries.
+
+---
+
+## 9) Tooling rules (safe defaults)
+
+* Formatting:
+
+  * `shfmt -i 2 -ci` **only** outside vendor SDK
+* Linting:
+
+  * `shellcheck` in warning-only mode for owned scripts
+* Avoid:
+
+  * Mass formatting
+  * Renames
+  * Automated “cleanup” tools
+
+If a tool requires re-validating all golden builds, it is not safe by default.
+
+---
+
+## Ready to proceed
+
+Once this checklist is complete and enforced, the **next safe step** is:
+
+➡️ **Model capability table extraction**
+(highest ROI, minimal behavior risk, easy to regression-check)
